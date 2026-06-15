@@ -1,4 +1,4 @@
-use iced::{Application, Command, Element, Settings, Theme, executor};
+use iced::{Application, Command, Element, Theme, executor};
 use iced::widget::{button, column, text, Container, TextInput};
 use crate::api::spotify::{Spotify, TokenInfo};
 use url::Url;
@@ -53,7 +53,7 @@ impl Application for App {
     fn new(_flags: Self::Flags) -> (Self, Command<Message>) {
         let spotify = Spotify::new();
         (
-            App {
+            Self {
                 spotify,
                 status: StatusEnum::LoggedOut,
                 auth_url: None,
@@ -76,7 +76,7 @@ impl Application for App {
                 let (auth_url, _csrf_state) = self.spotify.authorize_url();
                 // Open the URL in the browser
                 if let Err(e) = open::that(&auth_url) {
-                    self.error = Some(format!("Failed to open browser: {}", e));
+                    self.error = Some(format!("Failed to open browser: {e}"));
                 }
                 self.status = StatusEnum::LoggingIn { auth_url: auth_url.clone() };
                 self.auth_url = Some(auth_url);
@@ -101,13 +101,13 @@ impl Application for App {
                 // Exchange the code for a token
                 let spotify_clone = self.spotify.clone();
                 // We'll perform the token request asynchronously
-                return Command::perform(
+                Command::perform(
                     handle_token_request(spotify_clone, code),
                     |result| match result {
                         Ok(token_info) => Message::TokenReceived(token_info),
                         Err(e) => Message::TokenFailed(e.to_string()),
                     },
-                );
+                )
             }
             Message::TokenReceived(token_info) => {
                 self.token = Some(token_info.clone());
@@ -116,7 +116,7 @@ impl Application for App {
                 Command::none()
             }
             Message::TokenFailed(err) => {
-                self.error = Some(format!("Failed to get token: {}", err));
+                self.error = Some(format!("Failed to get token: {err}"));
                 self.status = StatusEnum::LoggedOut;
                 Command::none()
             }
@@ -130,18 +130,14 @@ impl Application for App {
         }
     }
 
-    fn view(&self) -> Element<Message> {
+    fn view(&self) -> Element<'_, Message> {
         let content = match &self.status {
             StatusEnum::LoggedOut => column![
                 text("Welcome to Spotix Lite!").size(30),
                 button("Login with Spotify")
                     .on_press(Message::LoginRequested)
                     .padding(10),
-                if let Some(err) = &self.error {
-                    text(err).style(iced::theme::Text::Color([1.0, 0.0, 0.0].into()))
-                } else {
-                    text("").width(0)
-                }
+                self.error.as_ref().map_or_else(|| text("").width(0), |err| text(err).style(iced::theme::Text::Color([1.0, 0.0, 0.0].into())))
             ]
             .padding(20)
             .align_items(iced::Alignment::Center),
@@ -157,11 +153,7 @@ impl Application for App {
                 button("Submit Code")
                     .on_press(Message::TokenRequested)
                     .padding(10),
-                if let Some(err) = &self.error {
-                    text(err).style(iced::theme::Text::Color([1.0, 0.0, 0.0].into()))
-                } else {
-                    text("").width(0)
-                }
+                self.error.as_ref().map_or_else(|| text("").width(0), |err| text(err).style(iced::theme::Text::Color([1.0, 0.0, 0.0].into())))
             ]
             .padding(20)
             .align_items(iced::Alignment::Start),
@@ -205,7 +197,7 @@ fn extract_code(input: &str) -> String {
 /// Asynchronously handles the token request: exchanges the code for a token and retrieves it.
 async fn handle_token_request(spotify: Spotify, code: String) -> Result<TokenInfo, Box<dyn Error + Send + Sync>> {
     // Exchange the code for a token
-    spotify.handle_callback(code, "".to_string()).await?;
+    spotify.handle_callback(code, String::new()).await?;
     // Get the token from the client
     let token = spotify
         .token()

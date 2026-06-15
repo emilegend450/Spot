@@ -13,6 +13,9 @@ This project aims to create a lightweight Spotify client for desktop use. The ap
 - Incompatible Rust edition causing async function issues
 - Iced GUI type mismatches in view functions
 - Spotify OAuth client needed verification
+- **Linker error in WSL**: `link.exe not found` (MSVC linker not available)
+- **Environment variable loading**: `.env` file with escaped newlines not parsing correctly
+- **WSL GUI compatibility**: Display issues with Wayland/X11 in WSL environment
 
 ### Changes Made
 
@@ -56,23 +59,41 @@ This project aims to create a lightweight Spotify client for desktop use. The ap
   url = "2.5.8"
   rand = "0.8"
   urlencoding = "2.1"
+  is-wsl = "0.4.0"
   ```
+
+#### 5. Fixed Linker and Environment Issues in WSL (`src/main.rs`)
+- **Linker Error Resolution**:
+  - Confirmed Rust toolchain targets `x86_64-unknown-linux-gnu` (GNU/Linux) which uses `ld` linker, not `link.exe`
+  - No MSVC linker required in WSL GNU environment
+  
+- **Environment Variable Loading**:
+  - Fixed `.env` file parsing that contained escaped newlines (`\\n`)
+  - Manual file reading with newline replacement before parsing
+  - Proper setting of `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` via `std::env::set_var`
+  
+- **WSL GUI Compatibility**:
+  - Added `WINIT_UNIX_BACKEND=x11` to force X11 backend instead of Wayland
+  - Added `LIBGL_ALWAYS_SOFTWARE=1` for software OpenGL rendering
+  - Conditional application of these variables only when running in WSL (using `is-wsl` crate)
 
 ## ✅ Current Build Status
 
 - **Compiles successfully** with `cargo build` (exit code 0)
+- **Linker error resolved**: No more `link.exe not found` errors
+- **Environment variables load correctly**: Spotify credentials properly read from `.env`
 - **Only minor warnings** (non-blocking):
   - Unused import: `Settings` in `src/gui/app.rs`
   - Lifetime elision confusion in view function signature (suggested fix available)
-  - Unused import: `Theme` in `src/main.rs`
 - **Zero compilation errors** - the binary builds cleanly
-- **Application runs and displays GUI window** with `cargo run`
+- **Application starts and initializes GUI** (requires X server for display in WSL)
 
 ## 🚀 How to Build and Run
 
 ### Prerequisites
 - Rust toolchain (cargo, rustc) - tested with 1.96.0
 - Spotify Developer account (for API credentials)
+- **For WSL GUI display**: X Server installed and running (VcXsrv, Xming, or WSLg)
 
 ### Setup
 1. Obtain Spotify API credentials:
@@ -82,34 +103,24 @@ This project aims to create a lightweight Spotify client for desktop use. The ap
 
 2. Set environment variables:
    ```bash
-   # In WSL/Linux terminal:
-   export SPOTIFY_CLIENT_ID="your_actual_client_id_here"
-   export SPOTIFY_CLIENT_SECRET="your_actual_client_secret_here"
-
-   # In Windows Command Prompt:
-   set SPOTIFY_CLIENT_ID=your_actual_client_id_here
-   set SPOTIFY_CLIENT_SECRET=your_actual_client_secret_here
-
-   # In Windows PowerShell:
-   $env:SPOTIFY_CLIENT_ID="your_actual_client_id_here"
-   $env:SPOTIFY_CLIENT_SECRET="your_actual_client_secret_here"
+   # Create .env file in project root:
+   echo "SPOTIFY_CLIENT_ID=your_actual_client_id_here" > .env
+   echo "SPOTIFY_CLIENT_SECRET=your_actual_client_secret_here" >> .env
    ```
 
 3. Build and run:
    ```bash
    cd /path/to/spotix-lite
+   cargo build
    cargo run
    ```
 
-### Using the Application
-1. Click "Login with Spotify" to open the authorization URL in your default browser
-2. Log in to Spotify and authorize the application
-3. You'll be redirected to `http://127.0.0.1:8080/callback?code=....&state=....`
-4. Copy either:
-   - The entire redirect URL, OR
-   - Just the `code` parameter value (everything after `code=` until `&` or end of string)
-5. Paste it into the application and click "Submit Code"
-6. On success: You'll see "Logged in successfully!" with your access token preview
+### WSL-Specific Notes
+For GUI display in WSL:
+1. Install an X Server on Windows (VcXsrv, Xming, or ensure WSLg is enabled)
+2. For VcXsrv/Xming: Start the X Server and set `DISPLAY=:0` (usually automatic)
+3. For WSLg: Ensure it's properly installed and running
+4. Test X11 forwarding: `sudo apt install x11-apps && xeyes` should display a window
 
 ## 📁 Project Structure
 ```
@@ -125,7 +136,7 @@ spotix-lite/
 │   ├── audio/           # Audio playback functionality (to be implemented)
 │   ├── utils/           # Utility functions
 │   ├── lib.rs
-│   └── main.rs          # Application entry point
+│   └── main.rs          # Application entry point (with WSL fixes)
 └── target/              # Build artifacts (generated)
 ```
 
@@ -142,6 +153,19 @@ spotix-lite/
 - Audio playback functionality not yet implemented/tested
 - Error handling could be enhanced for edge cases
 
+### WSL GUI Display Issues (To Be Fixed)
+The application builds and starts successfully, but GUI window may not display in WSL due to:
+1. **Missing X Server**: Requires VcXsrv, Xming, or WSLg to be running
+2. **Wayland/X11 Compatibility**: winit/Iced may have issues with WSL's display stack
+3. **OpenGL Configuration**: May need additional Mesa/Vulkan drivers in WSL
+
+**Workarounds to try**:
+- Ensure `DISPLAY=:0` is set correctly
+- Install Mesa utilities: `sudo apt install mesa-utils`
+- Try software rendering: `LIBGL_ALWAYS_SOFTWARE=1 cargo run`
+- Force X11 backend: `WINIT_UNIX_BACKEND=x11 cargo run`
+- Update winit/iced versions if compatible
+
 ### Planned Enhancements
 1. **Persistent token storage** (currently in-memory only)
 2. **Search functionality** for tracks, albums, artists
@@ -152,7 +176,7 @@ spotix-lite/
 7. **Settings/configuration UI**
 8. **Audio equalizer and effects**
 
-## 🐞 Resolved Compilation Errors
+## 🐞 Resolved Compilation & Linker Errors
 
 During the fix process, these specific errors were resolved:
 
@@ -167,7 +191,15 @@ During the fix process, these specific errors were resolved:
    - Fixed URL cloning in AuthUrlGenerated handler
    - Corrected error message type conversion
 
-## � Technical Implementation Notes
+4. **`error: linker link.exe not found`**
+   - Resolved by confirming GNU toolchain target (uses `ld` linker)
+   - No MSVC linker needed in WSL/Linux environment
+
+5. **Environment variable loading failure**
+   - Fixed `.env` file parsing with escaped newlines (`\\n`)
+   - Manual processing to replace escaped sequences before dotenvy parsing
+
+## �� Technical Implementation Notes
 
 ### Spotify OAuth Flow
 The implementation follows Spotify's Authorization Code Flow:
@@ -193,14 +225,19 @@ The implementation follows Spotify's Authorization Code Flow:
 - Uses asynchronous command handling for non-blocking operations
 - Proper error display and state management
 
+### WSL-Specific Implementation
+- Uses `is-wsl` crate to detect WSL environment
+- Conditionally sets environment variables for GUI compatibility:
+  - `WINIT_UNIX_BACKEND=x11` (forces X11 backend)
+  - `LIBGL_ALWAYS_SOFTWARE=1` (software OpenGL rendering)
+- Manual `.env` file processing to handle escaped newlines
+
 ## 📄 License
 
 [Specify your preferred license here - e.g., MIT, Apache-2.0, GPL-3.0]
 
 ---
 
-*Built with Rust + Iced. Authentication flow verified working with Spotify's OAuth 2.0 implementation.
-All compilation errors resolved - ready for feature expansion on a solid foundation.*
-
-**Last updated**: $(date)
-*Commit summary: Fixed compilation errors, updated Rust edition to 2024, resolved Iced GUI type mismatches, verified Spotify OAuth client.*
+*Last updated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")*
+*Commit summary: Fixed linker error in WSL, resolved environment variable loading, added WSL GUI compatibility settings, updated dependencies.*
+*Still needs: Proper X server configuration in WSL for GUI display.*
