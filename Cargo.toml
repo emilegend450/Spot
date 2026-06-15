@@ -1,12 +1,11 @@
 [package]
 name = "spotix-lite"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-iced = { version = "0.12", features = ["winit"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
-oauth2 = { version = "8.2", features = ["reqwest"] }
+iced = { version = "0.12", features = ["tokio"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.38", features = ["full"] }
@@ -14,3 +13,7 @@ rodio = "0.19"
 cpal = "0.16"
 symphonia = { version = "0.6", default-features = false, features = ["vorbis", "mp3", "aac", "flac"] }
 dotenvy = "0.15"
+open = "5.3.5"
+url = "2.5.8"
+rand = "0.8"
+urlencoding = "2.1"
