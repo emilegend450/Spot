@@ -3,7 +3,7 @@ use iced::widget::{button, column, text, Container, TextInput};
 use crate::api::spotify::{Spotify, TokenInfo};
 use url::Url;
 use std::error::Error;
-use is_wsl::is_wsl;
+use is_wsl;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -44,7 +44,7 @@ pub struct App {
 enum StatusEnum {
     LoggedOut,
     LoggingIn { auth_url: String },
-    LoggedIn { token_info: TokenInfo },
+    LoggedIn,
 }
 
 impl Application for App {
@@ -131,7 +131,7 @@ impl Application for App {
             }
             Message::TokenReceived(token_info) => {
                 self.token = Some(token_info.clone());
-                self.status = StatusEnum::LoggedIn { token_info };
+                self.status = StatusEnum::LoggedIn;
                 self.error = None;
                 Command::none()
             }
@@ -188,7 +188,7 @@ impl Application for App {
             ]
             .padding(20)
             .align_items(iced::Alignment::Start),
-            StatusEnum::LoggedIn { .. } => column![
+            StatusEnum::LoggedIn => column![
                 text("Logged in successfully!").size(20),
                 text("Logged in successfully! Token acquired.").size(16),
                 button("Logout")
