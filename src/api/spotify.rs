@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use rand::{Rng, distributions::Alphanumeric};
 
 /// Spotify client for handling OAuth and API requests.

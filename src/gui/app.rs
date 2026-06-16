@@ -3,6 +3,7 @@ use iced::widget::{button, column, text, Container, TextInput};
 use crate::api::spotify::{Spotify, TokenInfo};
 use url::Url;
 use std::error::Error;
+use is_wsl::is_wsl;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -76,14 +77,23 @@ impl Application for App {
             Message::LoginRequested => {
                 // Generate the auth URL and show it
                 let (auth_url, _csrf_state) = self.spotify.authorize_url();
-                // Open the URL in the browser
-                if let Err(e) = open::that(&auth_url) {
-                    self.error = Some(format!("Failed to open browser: {e}"));
+                // Open the URL in the browser (WSL-aware)
+                if is_wsl::is_wsl() {
+                    if let Err(e) = std::process::Command::new("cmd.exe")
+                        .args(["/c", "start", "", &auth_url])
+                        .spawn()
+                    {
+                        self.error = Some(format!("Failed to open browser: {e}"));
+                    }
+                } else {
+                    if let Err(e) = open::that(&auth_url) {
+                        self.error = Some(format!("Failed to open browser: {e}"));
+                    }
                 }
                 self.status = StatusEnum::LoggingIn { auth_url: auth_url.clone() };
                 self.auth_url = Some(auth_url);
                 // Start waiting for the callback automatically
-                let spotify_clone = self.spotify.clone();
+                let _spotify_clone = self.spotify.clone();
                 Command::perform(
                     crate::api::callback_server::wait_for_callback(),
                     move |result| match result {
@@ -109,14 +119,14 @@ impl Application for App {
                     return Command::none();
                 }
                 // Exchange the code for a token
-                let spotify_clone = self.spotify.clone();
+                let _spotify_clone = self.spotify.clone();
                 // We'll perform the token request asynchronously
                 Command::perform(
-                    handle_token_request(spotify_clone, code),
+                    handle_token_request(_spotify_clone, code),
                     |result| match result {
                         Ok(token_info) => Message::TokenReceived(token_info),
                         Err(e) => Message::TokenFailed(e.to_string()),
-                    },
+                    }
                 )
             }
             Message::TokenReceived(token_info) => {
@@ -178,7 +188,7 @@ impl Application for App {
             ]
             .padding(20)
             .align_items(iced::Alignment::Start),
-            StatusEnum::LoggedIn { token_info } => column![
+            StatusEnum::LoggedIn { .. } => column![
                 text("Logged in successfully!").size(20),
                 text("Logged in successfully! Token acquired.").size(16),
                 button("Logout")
