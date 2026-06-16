@@ -12,8 +12,10 @@ pub enum Message {
     AuthUrlGenerated(String),
     /// User has pasted a redirect URL or code
     CodeInputChanged(String),
-    /// Exchange the code for a token
+    /// Exchange the code for a token (manual entry)
     TokenRequested,
+    /// Received code and state from automatic callback listener
+    TokenReceivedWithState(String, String),
     /// Token received successfully
     TokenReceived(TokenInfo),
     /// Failed to get token
@@ -80,7 +82,15 @@ impl Application for App {
                 }
                 self.status = StatusEnum::LoggingIn { auth_url: auth_url.clone() };
                 self.auth_url = Some(auth_url);
-                Command::none()
+                // Start waiting for the callback automatically
+                let spotify_clone = self.spotify.clone();
+                Command::perform(
+                    crate::api::callback_server::wait_for_callback(),
+                    move |result| match result {
+                        Ok((code, state)) => Message::TokenReceivedWithState(code, state),
+                        Err(e) => Message::TokenFailed(e.to_string()),
+                    }
+                )
             }
             Message::AuthUrlGenerated(url) => {
                 self.auth_url = Some(url.clone());
@@ -115,6 +125,17 @@ impl Application for App {
                 self.error = None;
                 Command::none()
             }
+            Message::TokenReceivedWithState(code, state) => {
+                // Exchange the code for a token using the verified state
+                let spotify_clone = self.spotify.clone();
+                Command::perform(
+                    handle_token_request_with_state(spotify_clone, code, state),
+                    |result| match result {
+                        Ok(token_info) => Message::TokenReceived(token_info),
+                        Err(e) => Message::TokenFailed(e.to_string()),
+                    }
+                )
+            }
             Message::TokenFailed(err) => {
                 self.error = Some(format!("Failed to get token: {err}"));
                 self.status = StatusEnum::LoggedOut;
@@ -137,7 +158,7 @@ impl Application for App {
                 button("Login with Spotify")
                     .on_press(Message::LoginRequested)
                     .padding(10),
-                self.error.as_ref().map_or_else(|| text("").width(0), |err| text(err).style(iced::theme::Text::Color([1.0, 0.0, 0.0].into())))
+                self.error.as_ref().map_or_else(|| text(""), |err| text(err).style(iced::theme::Text::Color([1.0, 0.0, 0.0].into())))
             ]
             .padding(20)
             .align_items(iced::Alignment::Center),
@@ -153,13 +174,13 @@ impl Application for App {
                 button("Submit Code")
                     .on_press(Message::TokenRequested)
                     .padding(10),
-                self.error.as_ref().map_or_else(|| text("").width(0), |err| text(err).style(iced::theme::Text::Color([1.0, 0.0, 0.0].into())))
+                self.error.as_ref().map_or_else(|| text(""), |err| text(err).style(iced::theme::Text::Color([1.0, 0.0, 0.0].into())))
             ]
             .padding(20)
             .align_items(iced::Alignment::Start),
             StatusEnum::LoggedIn { token_info } => column![
                 text("Logged in successfully!").size(20),
-                text(format!("User: {}", token_info.access_token)).size(16),
+                text("Logged in successfully! Token acquired.").size(16),
                 button("Logout")
                     .on_press(Message::LogoutRequested)
                     .padding(10),
@@ -198,6 +219,18 @@ fn extract_code(input: &str) -> String {
 async fn handle_token_request(spotify: Spotify, code: String) -> Result<TokenInfo, Box<dyn Error + Send + Sync>> {
     // Exchange the code for a token
     spotify.handle_callback(code, String::new()).await?;
+    // Get the token from the client
+    let token = spotify
+        .token()
+        .await
+        .ok_or_else(|| Box::<dyn Error + Send + Sync>::from("No token found after callback"))?;
+    Ok(token)
+}
+
+/// Asynchronously handles the token request with state verification: exchanges the code for a token and retrieves it.
+async fn handle_token_request_with_state(spotify: Spotify, code: String, state: String) -> Result<TokenInfo, Box<dyn Error + Send + Sync>> {
+    // Exchange the code for a token with state verification
+    spotify.handle_callback(code, state).await?;
     // Get the token from the client
     let token = spotify
         .token()
