@@ -184,7 +184,6 @@ mod tests {
     use super::*;
     use tokio::net::TcpListener;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::time;
 
     /// Helper function to create a canned token response
     fn create_token_response() -> String {
@@ -198,13 +197,15 @@ mod tests {
     }
 
     /// Mock token server that serves the canned token response
-    /// Returns the join handle and a receiver that signals when the server is ready
-    async fn start_mock_token_server(port: u16) -> (tokio::task::JoinHandle<()>, tokio::sync::mpsc::Receiver<()>) {
-        let addr = format!("127.0.0.1:{}", port);
+    /// Returns the assigned port, join handle and a receiver that signals when the server is ready
+    async fn start_mock_token_server() -> (u16, tokio::task::JoinHandle<()>, tokio::sync::mpsc::Receiver<()>) {
+        // Bind to port 0 to get a random available port
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let addr = format!("127.0.0.1:{port}");
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let handle = tokio::spawn(async move {
-            let listener = TcpListener::bind(&addr).await.unwrap();
-            println!("Mock token server listening on {}", addr);
+            println!("Mock token server listening on {addr}");
             let _ = tx.send(()).await;
 
             // Small delay to ensure the test has time to make the connection after we signal ready
@@ -231,7 +232,7 @@ mod tests {
                 }
             }
         });
-        (handle, rx)
+        (port, handle, rx)
     }
 
     #[tokio::test]
@@ -241,29 +242,39 @@ mod tests {
             "test_client_id".to_string(),
             "test_client_secret".to_string(),
             "https://accounts.spotify.com/authorize".to_string(),
-            "http://127.0.0.1:8081/token".to_string(), // Custom token URL for testing
+            "http://127.0.0.1:8081/token".to_string(), // Custom token URL for testing (will be overridden)
             "http://127.0.0.1:8080/callback".to_string(),
         );
 
         // Generate auth URL and extract state
-        let (auth_url, _state_from_url) = spotify.authorize_url();
+        let (auth_url, state_from_url) = spotify.authorize_url();
         assert!(auth_url.contains("response_type=code"));
-        assert!(auth_url.contains(&_state_from_url));
+        assert!(auth_url.contains(&state_from_url));
 
         // Start mock token server and wait for it to be ready
-        let (_server_handle, mut ready_rx) = start_mock_token_server(8081).await;
+        let (mock_port, _server_handle, mut ready_rx) = start_mock_token_server().await;
+        // Update the spotify client's token URL to use the actual port
+        let mut spotify_with_port = Spotify::new_with_params(
+            "test_client_id".to_string(),
+            "test_client_secret".to_string(),
+            "https://accounts.spotify.com/authorize".to_string(),
+            format!("http://127.0.0.1:{mock_port}/token"),
+            "http://127.0.0.1:8080/callback".to_string(),
+        );
+        // Set the pending state to the one we generated from the original authorize_url call
+        *spotify_with_port.pending_state.lock().unwrap() = Some(state_from_url.clone());
         // Wait for the server to signal it's ready
         let _ = ready_rx.recv().await;
 
         // Simulate callback with matching state
         let test_code = "test_auth_code".to_string();
-        let result = spotify.handle_callback(test_code.clone(), _state_from_url.clone()).await;
+        let result = spotify_with_port.handle_callback(test_code.clone(), state_from_url).await;
 
         // Should succeed
         assert!(result.is_ok(), "Handle callback should succeed with matching state: {:?}", result);
 
         // Verify token was stored
-        let token = spotify.token().await;
+        let token = spotify_with_port.token().await;
         assert!(token.is_some(), "Token should be stored after successful callback");
         let token_info = token.unwrap();
         assert_eq!(token_info.access_token, "test_access_token");
@@ -280,22 +291,32 @@ mod tests {
             "test_client_id".to_string(),
             "test_client_secret".to_string(),
             "https://accounts.spotify.com/authorize".to_string(),
-            "http://127.0.0.1:8082/token".to_string(), // Different port to avoid conflict
+            "http://127.0.0.1:8082/token".to_string(), // Custom token URL for testing (will be overridden)
             "http://127.0.0.1:8080/callback".to_string(),
         );
 
         // Generate auth URL to set up pending state
-        let (_auth_url, _state_from_url) = spotify.authorize_url();
+        let (_auth_url, state_from_url) = spotify.authorize_url();
 
         // Start mock token server (won't be reached due to CSRF failure)
-        let (_server_handle, mut ready_rx) = start_mock_token_server(8082).await;
+        let (mock_port, _server_handle, mut ready_rx) = start_mock_token_server().await;
+        // Update the spotify client's token URL to use the actual port
+        let mut spotify_with_port = Spotify::new_with_params(
+            "test_client_id".to_string(),
+            "test_client_secret".to_string(),
+            "https://accounts.spotify.com/authorize".to_string(),
+            format!("http://127.0.0.1:{mock_port}/token"),
+            "http://127.0.0.1:8080/callback".to_string(),
+        );
+        // Set the pending state to the one we generated from the original authorize_url call
+        *spotify_with_port.pending_state.lock().unwrap() = Some(state_from_url);
         // Wait for the server to signal it's ready (though we won't reach it)
         let _ = ready_rx.recv().await;
 
         // Simulate callback with mismatched state
         let test_code = "test_auth_code".to_string();
         let wrong_state = "wrong_state_value".to_string();
-        let result = spotify.handle_callback(test_code, wrong_state).await;
+        let result = spotify_with_port.handle_callback(test_code, wrong_state).await;
 
         // Should fail with CSRF error
         assert!(result.is_err(), "Handle callback should fail with mismatched state");
@@ -303,7 +324,7 @@ mod tests {
         assert!(err_msg.contains("State mismatch"), "Error should indicate CSRF attack: {}", err_msg);
 
         // Verify no token was stored
-        let token = spotify.token().await;
+        let token = spotify_with_port.token().await;
         assert!(token.is_none(), "No token should be stored after CSRF failure");
     }
 
@@ -314,7 +335,7 @@ mod tests {
             "test_client_id".to_string(),
             "test_client_secret".to_string(),
             "https://accounts.spotify.com/authorize".to_string(),
-            "http://127.0.0.1:8083/token".to_string(), // Different port to avoid conflict
+            "http://127.0.0.1:8083/token".to_string(), // Custom token URL for testing (will be overridden)
             "http://127.0.0.1:8080/callback".to_string(),
         );
 
@@ -322,14 +343,22 @@ mod tests {
         *spotify.pending_state.lock().unwrap() = None;
 
         // Start mock token server (won't be reached)
-        let (_server_handle, mut ready_rx) = start_mock_token_server(8083).await;
+        let (mock_port, _server_handle, mut ready_rx) = start_mock_token_server().await;
+        // Update the spotify client's token URL to use the actual port
+        let spotify_with_port = Spotify::new_with_params(
+            "test_client_id".to_string(),
+            "test_client_secret".to_string(),
+            "https://accounts.spotify.com/authorize".to_string(),
+            format!("http://127.0.0.1:{mock_port}/token"),
+            "http://127.0.0.1:8080/callback".to_string(),
+        );
         // Wait for the server to signal it's ready (though we won't reach it)
         let _ = ready_rx.recv().await;
 
         // Simulate callback with any state (should fail due to missing pending state)
         let test_code = "test_auth_code".to_string();
         let test_state = "any_state".to_string();
-        let result = spotify.handle_callback(test_code, test_state).await;
+        let result = spotify_with_port.handle_callback(test_code, test_state).await;
 
         // Should fail with "No pending state" error
         assert!(result.is_err(), "Handle callback should fail with missing pending state");

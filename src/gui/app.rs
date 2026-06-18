@@ -13,8 +13,6 @@ use std::process::Command as SysCommand;
 pub enum Message {
     /// Start the login process
     LoginRequested,
-    /// Open the authorization URL in the browser
-    AuthUrlGenerated(String),
     /// User has pasted a redirect URL or code
     CodeInputChanged(String),
     /// Exchange the code for a token (manual entry)
@@ -114,27 +112,22 @@ impl Application for App {
                     }
                 )
             }
-            Message::AuthUrlGenerated(url) => {
-                self.auth_url = Some(url.clone());
-                self.status = StatusEnum::LoggingIn { auth_url: url };
-                IcedCommand::none()
-            }
+
             Message::CodeInputChanged(input) => {
                 self.code_input = input;
                 IcedCommand::none()
             }
             Message::TokenRequested => {
-                // Extract code from the input (could be a full redirect URL or just the code)
-                let code = extract_code(&self.code_input);
+                // Extract code and state from the input (could be a full redirect URL or just the code)
+                let (code, state) = extract_code_and_state(&self.code_input);
                 if code.is_empty() {
                     self.error = Some("Please paste the full redirect URL or the authorization code.".to_string());
                     return IcedCommand::none();
                 }
-                // Exchange the code for a token
-                let _spotify_clone = self.spotify.clone();
-                // We'll perform the token request asynchronously
+                // Exchange the code for a token with state verification
+                let spotify_clone = self.spotify.clone();
                 IcedCommand::perform(
-                    handle_token_request(_spotify_clone, code),
+                    handle_token_request_with_state(spotify_clone, code, state),
                     |result| match result {
                         Ok(token_info) => Message::TokenReceived(token_info),
                         Err(e) => Message::TokenFailed(e.to_string()),
@@ -264,40 +257,35 @@ fn open_url_via_temp_file(url: &str) -> std::io::Result<()> {
 
 /// Opens a URL using properly quoted cmd.exe invocation (WSL fallback)
 fn open_url_via_cmd_quoted(url: &str) -> std::io::Result<()> {
-    // Properly quote the URL for cmd.exe
-    let quoted_url = format!("\"{}\"", url.replace('"', "\\\""));
-    
-    SysCommand::new("cmd.exe")
-        .args(["/c", "start", "", &quoted_url])
+    // Use PowerShell to start the URL, which handles quoting better in WSL
+    // Escape single quotes in URL for PowerShell by doubling them
+    let escaped_url = url.replace("'", "''");
+    let ps_command = format!("Start-Process '{}'", escaped_url);
+    SysCommand::new("powershell.exe")
+        .args(["-NoProfile", "-Command", &ps_command])
         .spawn()?;
-    
     Ok(())
 }
 
-/// Extracts the authorization code from a redirect URL or returns the input if it's already just the code.
-fn extract_code(input: &str) -> String {
-    // If the input contains 'code=', we try to extract the code parameter
+/// Extracts the authorization code and state from a redirect URL or returns the input if it's already just the code.
+fn extract_code_and_state(input: &str) -> (String, String) {
+    // If the input contains 'code=', we try to extract the code and state parameters
     if let Ok(url) = Url::parse(input) {
-        return url.query_pairs()
+        let code = url.query_pairs()
             .find(|(key, _)| key == "code")
             .map(|(_, value)| value.into_owned())
             .unwrap_or_default();
+        let state = url.query_pairs()
+            .find(|(key, _)| key == "state")
+            .map(|(_, value)| value.into_owned())
+            .unwrap_or_default();
+        return (code, state);
     }
     // Otherwise, assume the input is the code itself (trim whitespace)
-    input.trim().to_string()
+    (input.trim().to_string(), String::new())
 }
 
-/// Asynchronously handles the token request: exchanges the code for a token and retrieves it.
-async fn handle_token_request(spotify: Spotify, code: String) -> Result<TokenInfo, Box<dyn Error + Send + Sync>> {
-    // Exchange the code for a token
-    spotify.handle_callback(code, String::new()).await?;
-    // Get the token from the client
-    let token = spotify
-        .token()
-        .await
-        .ok_or_else(|| Box::<dyn Error + Send + Sync>::from("No token found after callback"))?;
-    Ok(token)
-}
+
 
 /// Asynchronously handles the token request with state verification: exchanges the code for a token and retrieves it.
 async fn handle_token_request_with_state(spotify: Spotify, code: String, state: String) -> Result<TokenInfo, Box<dyn Error + Send + Sync>> {

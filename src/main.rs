@@ -23,10 +23,8 @@ fn main() -> iced::Result {
     }
     // Read the .env file, replace escaped newlines, and parse
     if let Ok(contents) = fs::read_to_string(".env") {
-        println!("Raw .env contents (first 200 chars): {:?}", &contents[..std::cmp::min(contents.len(), 200)]);
         // Replace escaped newlines (\\n) with actual newlines
         let contents = contents.replace("\\n", "\n");
-        println!("After replacing escaped newlines (first 200 chars): {:?}", &contents[..std::cmp::min(contents.len(), 200)]);
         // Parse line by line
         for line in contents.lines() {
             let line = line.trim();
