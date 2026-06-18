@@ -79,11 +79,22 @@ impl Application for App {
                 let (auth_url, _csrf_state) = self.spotify.authorize_url();
                 // Open the URL in the browser (WSL-aware)
                 if is_wsl::is_wsl() {
-                    if let Err(e) = std::process::Command::new("cmd.exe")
-                        .args(["/c", "start", "", &auth_url])
+                    // Debug: print the actual URL we're trying to open
+                    println!("DEBUG: Auth URL: {}", auth_url);
+                    // Use explorer.exe directly which is most reliable in WSL
+                    // No extra quoting needed - pass URL as-is
+                    if let Err(e) = std::process::Command::new("explorer.exe")
+                        .arg(&auth_url)
                         .spawn()
                     {
-                        self.error = Some(format!("Failed to open browser: {e}"));
+                        // Fallback to cmd.exe with start if explorer fails
+                        println!("DEBUG: explorer.exe failed: {}, trying cmd.exe", e);
+                        if let Err(e2) = std::process::Command::new("cmd.exe")
+                            .args(["/c", "start", "", &auth_url])
+                            .spawn()
+                        {
+                            self.error = Some(format!("Failed to open browser: {} / {}", e, e2));
+                        }
                     }
                 } else {
                     if let Err(e) = open::that(&auth_url) {

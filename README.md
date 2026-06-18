@@ -68,7 +68,7 @@ This project aims to create a lightweight Spotify client for desktop use. The ap
   - No MSVC linker required in WSL GNU environment
   
 - **Environment Variable Loading**:
-  - Fixed `.env` file parsing that contained escaped newlines (`\\n`)
+  - Fixed `.env` file parsing that contained escaped newlines (`\\\\n`)
   - Manual file reading with newline replacement before parsing
   - Proper setting of `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` via `std::env::set_var`
   
@@ -166,6 +166,15 @@ The application builds and starts successfully, but GUI window may not display i
 - Force X11 backend: `WINIT_UNIX_BACKEND=x11 cargo run`
 - Update winit/iced versions if compatible
 
+### Current Issues to Address (Next Session)
+1. **Browser Launch Issue**: The login button opens Windows File Explorer instead of the browser
+   - When manually copying the debug auth URL to Chrome, OAuth works correctly
+   - Need to fix the WSL browser launching mechanism
+
+2. **Token Retrieval Failure**: After successful authorization in browser, the app fails to retrieve the token
+   - Callback server receives the redirect but token exchange fails
+   - Need to debug the token request/response handling
+
 ### Planned Enhancements
 1. **Persistent token storage** (currently in-memory only)
 2. **Search functionality** for tracks, albums, artists
@@ -196,10 +205,10 @@ During the fix process, these specific errors were resolved:
    - No MSVC linker needed in WSL/Linux environment
 
 5. **Environment variable loading failure**
-   - Fixed `.env` file parsing with escaped newlines (`\\n`)
+   - Fixed `.env` file parsing with escaped newlines (`\\\\n`)
    - Manual processing to replace escaped sequences before dotenvy parsing
 
-## �� Technical Implementation Notes
+## 📄 Technical Implementation Notes
 
 ### Spotify OAuth Flow
 The implementation follows Spotify's Authorization Code Flow:
@@ -237,7 +246,6 @@ The implementation follows Spotify's Authorization Code Flow:
 [Specify your preferred license here - e.g., MIT, Apache-2.0, GPL-3.0]
 
 ---
-
 *Last updated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")*
 *Commit summary: Fixed linker error in WSL, resolved environment variable loading, added WSL GUI compatibility settings, updated dependencies.*
-*Still needs: Proper X server configuration in WSL for GUI display.*
+*Still needs: Fix browser launching in WSL and token retrieval after OAuth authorization.*
