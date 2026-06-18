@@ -38,7 +38,13 @@ fn main() -> iced::Result {
                 let value = value.trim();
                 if !key.is_empty() && !value.is_empty() {
                     unsafe { env::set_var(key, value); }
-                    println!("Set {}={}", key, value);
+                    // Redact sensitive information
+                    let display_value = if key.to_uppercase().contains("SECRET") || key.to_uppercase().contains("TOKEN") {
+                        "[REDACTED]"
+                    } else {
+                        value
+                    };
+                    println!("Set {}={}", key, display_value);
                 }
             }
         }

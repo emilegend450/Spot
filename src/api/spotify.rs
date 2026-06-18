@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
+use std::sync::Mutex;
 use rand::{Rng, distributions::Alphanumeric};
 
 /// Spotify client for handling OAuth and API requests.
@@ -16,7 +17,13 @@ pub struct Spotify {
     /// Token storage (in-memory for now, but could be persisted).
     pub token: Arc<tokio::sync::Mutex<Option<TokenInfo>>>,
     /// Pending OAuth state for CSRF protection.
-    pending_state: Arc<tokio::sync::Mutex<Option<String>>>,
+    pending_state: Arc<Mutex<Option<String>>>,
+}
+
+impl Default for Spotify {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Spotify {
@@ -42,7 +49,24 @@ impl Spotify {
             redirect_url,
             http_client,
             token: Arc::new(tokio::sync::Mutex::new(None)),
-            pending_state: Arc::new(tokio::sync::Mutex::new(None)),
+            pending_state: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Create a new Spotify client with custom parameters (for testing).
+    #[doc(hidden)]
+    pub fn new_with_params(client_id: String, client_secret: String, auth_url: String, token_url: String, redirect_url: String) -> Self {
+        let http_client = Arc::new(reqwest::Client::new());
+
+        Self {
+            client_id,
+            client_secret,
+            auth_url,
+            token_url,
+            redirect_url,
+            http_client,
+            token: Arc::new(tokio::sync::Mutex::new(None)),
+            pending_state: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -54,7 +78,7 @@ impl Spotify {
             .map(char::from)
             .collect();
 
-        let scope = vec![
+        let scope = [
             "user-read-private",
             "user-read-email",
             "streaming",
@@ -77,18 +101,21 @@ impl Spotify {
             urlencoding::encode(&state)
         );
 
+        // Store the generated state for CSRF protection
+        *self.pending_state.lock().unwrap() = Some(state.clone());
+
         (auth_url, state)
     }
 
     /// Handle the callback from Spotify and exchange the code for a token.
     pub async fn handle_callback(&self, code: String, state: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Verify the state to prevent CSRF attacks
-        let expected_state = self.pending_state.lock().await.take()
+        let expected_state = self.pending_state.lock().unwrap().take()
             .ok_or("No pending state — authorize first")?;
         if state != expected_state {
             return Err("State mismatch — possible CSRF attack".into());
         }
-        
+
         // Exchange the code for an access token
         let token_info = self.http_client
             .post(&self.token_url)
@@ -150,4 +177,163 @@ pub struct TokenInfo {
     pub expires_in: u32,
     pub refresh_token: Option<String>,
     pub scope: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::time;
+
+    /// Helper function to create a canned token response
+    fn create_token_response() -> String {
+        r#"{
+            "access_token": "test_access_token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "refresh_token": "test_refresh_token",
+            "scope": "user-read-private user-read-email"
+        }"#.to_string()
+    }
+
+    /// Mock token server that serves the canned token response
+    /// Returns the join handle and a receiver that signals when the server is ready
+    async fn start_mock_token_server(port: u16) -> (tokio::task::JoinHandle<()>, tokio::sync::mpsc::Receiver<()>) {
+        let addr = format!("127.0.0.1:{}", port);
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let handle = tokio::spawn(async move {
+            let listener = TcpListener::bind(&addr).await.unwrap();
+            println!("Mock token server listening on {}", addr);
+            let _ = tx.send(()).await;
+
+            // Small delay to ensure the test has time to make the connection after we signal ready
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+            // Accept one connection and serve the token response
+            match listener.accept().await {
+                Ok((mut socket, _)) => {
+                    // Read the request (we don't need it, but we must read it to avoid leaving the client hanging)
+                    let mut buf = [0u8; 1024];
+                    let _ = socket.read(&mut buf).await;
+                    let response = create_token_response();
+                    let http_response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        response.len(),
+                        response
+                    );
+
+                    let _ = socket.write_all(http_response.as_bytes()).await;
+                    let _ = socket.flush().await;
+                }
+                Err(e) => {
+                    eprintln!("Accept failed: {e}");
+                }
+            }
+        });
+        (handle, rx)
+    }
+
+    #[tokio::test]
+    async fn test_oauth_flow_success() {
+        // Set up test Spotify client with mock endpoints
+        let spotify = Spotify::new_with_params(
+            "test_client_id".to_string(),
+            "test_client_secret".to_string(),
+            "https://accounts.spotify.com/authorize".to_string(),
+            "http://127.0.0.1:8081/token".to_string(), // Custom token URL for testing
+            "http://127.0.0.1:8080/callback".to_string(),
+        );
+
+        // Generate auth URL and extract state
+        let (auth_url, _state_from_url) = spotify.authorize_url();
+        assert!(auth_url.contains("response_type=code"));
+        assert!(auth_url.contains(&_state_from_url));
+
+        // Start mock token server and wait for it to be ready
+        let (_server_handle, mut ready_rx) = start_mock_token_server(8081).await;
+        // Wait for the server to signal it's ready
+        let _ = ready_rx.recv().await;
+
+        // Simulate callback with matching state
+        let test_code = "test_auth_code".to_string();
+        let result = spotify.handle_callback(test_code.clone(), _state_from_url.clone()).await;
+
+        // Should succeed
+        assert!(result.is_ok(), "Handle callback should succeed with matching state: {:?}", result);
+
+        // Verify token was stored
+        let token = spotify.token().await;
+        assert!(token.is_some(), "Token should be stored after successful callback");
+        let token_info = token.unwrap();
+        assert_eq!(token_info.access_token, "test_access_token");
+        assert_eq!(token_info.token_type, "Bearer");
+        assert_eq!(token_info.expires_in, 3600);
+        assert_eq!(token_info.refresh_token.as_deref(), Some("test_refresh_token"));
+        assert_eq!(token_info.scope.as_deref(), Some("user-read-private user-read-email"));
+    }
+
+    #[tokio::test]
+    async fn test_oauth_flow_csrf_failure() {
+        // Set up test Spotify client
+        let spotify = Spotify::new_with_params(
+            "test_client_id".to_string(),
+            "test_client_secret".to_string(),
+            "https://accounts.spotify.com/authorize".to_string(),
+            "http://127.0.0.1:8082/token".to_string(), // Different port to avoid conflict
+            "http://127.0.0.1:8080/callback".to_string(),
+        );
+
+        // Generate auth URL to set up pending state
+        let (_auth_url, _state_from_url) = spotify.authorize_url();
+
+        // Start mock token server (won't be reached due to CSRF failure)
+        let (_server_handle, mut ready_rx) = start_mock_token_server(8082).await;
+        // Wait for the server to signal it's ready (though we won't reach it)
+        let _ = ready_rx.recv().await;
+
+        // Simulate callback with mismatched state
+        let test_code = "test_auth_code".to_string();
+        let wrong_state = "wrong_state_value".to_string();
+        let result = spotify.handle_callback(test_code, wrong_state).await;
+
+        // Should fail with CSRF error
+        assert!(result.is_err(), "Handle callback should fail with mismatched state");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("State mismatch"), "Error should indicate CSRF attack: {}", err_msg);
+
+        // Verify no token was stored
+        let token = spotify.token().await;
+        assert!(token.is_none(), "No token should be stored after CSRF failure");
+    }
+
+    #[tokio::test]
+    async fn test_oauth_flow_missing_state() {
+        // Set up test Spotify client
+        let spotify = Spotify::new_with_params(
+            "test_client_id".to_string(),
+            "test_client_secret".to_string(),
+            "https://accounts.spotify.com/authorize".to_string(),
+            "http://127.0.0.1:8083/token".to_string(), // Different port to avoid conflict
+            "http://127.0.0.1:8080/callback".to_string(),
+        );
+
+        // Manually clear the pending state to simulate missing state
+        *spotify.pending_state.lock().unwrap() = None;
+
+        // Start mock token server (won't be reached)
+        let (_server_handle, mut ready_rx) = start_mock_token_server(8083).await;
+        // Wait for the server to signal it's ready (though we won't reach it)
+        let _ = ready_rx.recv().await;
+
+        // Simulate callback with any state (should fail due to missing pending state)
+        let test_code = "test_auth_code".to_string();
+        let test_state = "any_state".to_string();
+        let result = spotify.handle_callback(test_code, test_state).await;
+
+        // Should fail with "No pending state" error
+        assert!(result.is_err(), "Handle callback should fail with missing pending state");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("No pending state"), "Error should indicate missing state: {}", err_msg);
+    }
 }

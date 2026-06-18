@@ -1,9 +1,13 @@
-use iced::{Application, Command, Element, Theme, executor};
+use iced::{Application, Command as IcedCommand, Element, Theme, executor};
 use iced::widget::{button, column, text, Container, TextInput};
 use crate::api::spotify::{Spotify, TokenInfo};
 use url::Url;
 use std::error::Error;
 use is_wsl;
+use std::fs::File;
+use std::io::Write;
+use std::env::temp_dir;
+use std::process::Command as SysCommand;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -53,7 +57,7 @@ impl Application for App {
     type Theme = Theme;
     type Flags = ();
 
-    fn new(_flags: Self::Flags) -> (Self, Command<Message>) {
+    fn new(_flags: Self::Flags) -> (Self, IcedCommand<Message>) {
         let spotify = Spotify::new();
         (
             Self {
@@ -64,7 +68,7 @@ impl Application for App {
                 token: None,
                 error: None,
             },
-            Command::none(),
+            IcedCommand::none(),
         )
     }
 
@@ -72,7 +76,7 @@ impl Application for App {
         String::from("Spotix Lite")
     }
 
-    fn update(&mut self, message: Self::Message) -> Command<Message> {
+    fn update(&mut self, message: Self::Message) -> IcedCommand<Message> {
         match message {
             Message::LoginRequested => {
                 // Generate the auth URL and show it
@@ -81,20 +85,17 @@ impl Application for App {
                 if is_wsl::is_wsl() {
                     // Debug: print the actual URL we're trying to open
                     println!("DEBUG: Auth URL: {}", auth_url);
-                    // Use explorer.exe directly which is most reliable in WSL
-                    // No extra quoting needed - pass URL as-is
-                    if let Err(e) = std::process::Command::new("explorer.exe")
-                        .arg(&auth_url)
-                        .spawn()
-                    {
-                        // Fallback to cmd.exe with start if explorer fails
-                        println!("DEBUG: explorer.exe failed: {}, trying cmd.exe", e);
-                        if let Err(e2) = std::process::Command::new("cmd.exe")
-                            .args(["/c", "start", "", &auth_url])
-                            .spawn()
-                        {
+                    // Use temp file approach to avoid & character issues in WSL
+                    if let Err(e) = open_url_via_temp_file(&auth_url) {
+                        println!("DEBUG: Temp file method failed: {}, trying cmd.exe with quoting", e);
+                        // Fallback to properly quoted cmd.exe invocation
+                        if let Err(e2) = open_url_via_cmd_quoted(&auth_url) {
                             self.error = Some(format!("Failed to open browser: {} / {}", e, e2));
+                        } else {
+                            println!("DEBUG: Successfully opened URL via quoted cmd.exe");
                         }
+                    } else {
+                        println!("DEBUG: Successfully opened URL via temp file method");
                     }
                 } else {
                     if let Err(e) = open::that(&auth_url) {
@@ -105,7 +106,7 @@ impl Application for App {
                 self.auth_url = Some(auth_url);
                 // Start waiting for the callback automatically
                 let _spotify_clone = self.spotify.clone();
-                Command::perform(
+                IcedCommand::perform(
                     crate::api::callback_server::wait_for_callback(),
                     move |result| match result {
                         Ok((code, state)) => Message::TokenReceivedWithState(code, state),
@@ -116,23 +117,23 @@ impl Application for App {
             Message::AuthUrlGenerated(url) => {
                 self.auth_url = Some(url.clone());
                 self.status = StatusEnum::LoggingIn { auth_url: url };
-                Command::none()
+                IcedCommand::none()
             }
             Message::CodeInputChanged(input) => {
                 self.code_input = input;
-                Command::none()
+                IcedCommand::none()
             }
             Message::TokenRequested => {
                 // Extract code from the input (could be a full redirect URL or just the code)
                 let code = extract_code(&self.code_input);
                 if code.is_empty() {
                     self.error = Some("Please paste the full redirect URL or the authorization code.".to_string());
-                    return Command::none();
+                    return IcedCommand::none();
                 }
                 // Exchange the code for a token
                 let _spotify_clone = self.spotify.clone();
                 // We'll perform the token request asynchronously
-                Command::perform(
+                IcedCommand::perform(
                     handle_token_request(_spotify_clone, code),
                     |result| match result {
                         Ok(token_info) => Message::TokenReceived(token_info),
@@ -144,12 +145,12 @@ impl Application for App {
                 self.token = Some(token_info.clone());
                 self.status = StatusEnum::LoggedIn;
                 self.error = None;
-                Command::none()
+                IcedCommand::none()
             }
             Message::TokenReceivedWithState(code, state) => {
                 // Exchange the code for a token using the verified state
                 let spotify_clone = self.spotify.clone();
-                Command::perform(
+                IcedCommand::perform(
                     handle_token_request_with_state(spotify_clone, code, state),
                     |result| match result {
                         Ok(token_info) => Message::TokenReceived(token_info),
@@ -160,14 +161,14 @@ impl Application for App {
             Message::TokenFailed(err) => {
                 self.error = Some(format!("Failed to get token: {err}"));
                 self.status = StatusEnum::LoggedOut;
-                Command::none()
+                IcedCommand::none()
             }
             Message::LogoutRequested => {
                 self.token = None;
                 self.status = StatusEnum::LoggedOut;
                 self.auth_url = None;
                 self.code_input.clear();
-                Command::none()
+                IcedCommand::none()
             }
         }
     }
@@ -181,8 +182,8 @@ impl Application for App {
                     .padding(10),
                 self.error.as_ref().map_or_else(|| text(""), |err| text(err).style(iced::theme::Text::Color([1.0, 0.0, 0.0].into())))
             ]
-            .padding(20)
-            .align_items(iced::Alignment::Center),
+                .padding(20)
+                .align_items(iced::Alignment::Center),
             StatusEnum::LoggingIn { auth_url } => column![
                 text("Please authorize Spotix Lite in your browser:").size(20),
                 text(auth_url).size(16),
@@ -197,8 +198,8 @@ impl Application for App {
                     .padding(10),
                 self.error.as_ref().map_or_else(|| text(""), |err| text(err).style(iced::theme::Text::Color([1.0, 0.0, 0.0].into())))
             ]
-            .padding(20)
-            .align_items(iced::Alignment::Start),
+                .padding(20)
+                .align_items(iced::Alignment::Start),
             StatusEnum::LoggedIn => column![
                 text("Logged in successfully!").size(20),
                 text("Logged in successfully! Token acquired.").size(16),
@@ -206,8 +207,8 @@ impl Application for App {
                     .on_press(Message::LogoutRequested)
                     .padding(10),
             ]
-            .padding(20)
-            .align_items(iced::Alignment::Center),
+                .padding(20)
+                .align_items(iced::Alignment::Center),
         };
 
         Container::new(content)
@@ -221,6 +222,56 @@ impl Application for App {
     fn theme(&self) -> Theme {
         Theme::default()
     }
+}
+
+/// Opens a URL using the temp file method (WSL-friendly)
+fn open_url_via_temp_file(url: &str) -> std::io::Result<()> {
+    // Create a temporary HTML file that redirects to the URL
+    let temp_dir = temp_dir();
+    let temp_file_path = temp_dir.join(format!("spotix_redirect_{}.html", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+    
+    let html_content = format!(
+        "<!DOCTYPE html>\n<html>\n<head>\n<meta http-equiv=\"refresh\" content=\"0; url={}\">\n<title>Redirecting to Spotify...</title>\n</head>\n<body>\nIf you are not redirected automatically, follow this <a href=\"{}\">link</a>.\n</body>\n</html>",
+        url, url
+    );
+    
+    // Write the HTML file
+    let mut file = File::create(&temp_file_path)?;
+    file.write_all(html_content.as_bytes())?;
+    
+    // Convert the path to Windows format for explorer.exe
+    let windows_path = if cfg!(target_os = "linux") && is_wsl::is_wsl() {
+        // Use wslpath to convert Linux path to Windows path
+        let output = SysCommand::new("wslpath")
+            .arg("-w")
+            .arg(&temp_file_path)
+            .output()?;
+        if !output.status.success() {
+            return Err(std::io::Error::other("wslpath failed"));
+        }
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    } else {
+        temp_file_path.to_string_lossy().to_string()
+    };
+    
+    // Open the temp file with explorer.exe
+    SysCommand::new("explorer.exe")
+        .arg(&windows_path)
+        .spawn()?;
+    
+    Ok(())
+}
+
+/// Opens a URL using properly quoted cmd.exe invocation (WSL fallback)
+fn open_url_via_cmd_quoted(url: &str) -> std::io::Result<()> {
+    // Properly quote the URL for cmd.exe
+    let quoted_url = format!("\"{}\"", url.replace('"', "\\\""));
+    
+    SysCommand::new("cmd.exe")
+        .args(["/c", "start", "", &quoted_url])
+        .spawn()?;
+    
+    Ok(())
 }
 
 /// Extracts the authorization code from a redirect URL or returns the input if it's already just the code.
