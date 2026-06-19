@@ -254,7 +254,7 @@ mod tests {
         // Start mock token server and wait for it to be ready
         let (mock_port, _server_handle, mut ready_rx) = start_mock_token_server().await;
         // Update the spotify client's token URL to use the actual port
-        let mut spotify_with_port = Spotify::new_with_params(
+        let spotify_with_port = Spotify::new_with_params(
             "test_client_id".to_string(),
             "test_client_secret".to_string(),
             "https://accounts.spotify.com/authorize".to_string(),
@@ -301,7 +301,7 @@ mod tests {
         // Start mock token server (won't be reached due to CSRF failure)
         let (mock_port, _server_handle, mut ready_rx) = start_mock_token_server().await;
         // Update the spotify client's token URL to use the actual port
-        let mut spotify_with_port = Spotify::new_with_params(
+        let spotify_with_port = Spotify::new_with_params(
             "test_client_id".to_string(),
             "test_client_secret".to_string(),
             "https://accounts.spotify.com/authorize".to_string(),

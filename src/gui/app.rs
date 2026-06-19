@@ -273,7 +273,7 @@ fn open_url_via_temp_file(url: &str) -> std::io::Result<()> {
     ));
 
     let html_content = format!(
-        "<!DOCTYPE html>\\n<html>\\n<head>\\n<meta http-equiv=\\\"refresh\\\" content=\\\"0; url={}\\\">\\n<title>Redirecting to Spotify...</title>\\n</head>\\n<body>\\nIf you are not redirected automatically, follow this <a href=\\\"{}\\\">link</a>.\\n</body>\\n</html>",
+        "<!DOCTYPE html>\n<html>\n<head>\n<meta http-equiv=\"refresh\" content=\"0; url={}\">\n<title>Redirecting to Spotify...</title>\n</head>\n<body>\nIf you are not redirected automatically, follow this <a href=\"{}\">link</a>.\n</body>\n</html>",
         url, url
     );
 
