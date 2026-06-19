@@ -2,12 +2,18 @@ use iced::{Application, Command as IcedCommand, Element, Theme, executor};
 use iced::widget::{button, column, text, Container, TextInput};
 use crate::api::spotify::{Spotify, TokenInfo};
 use url::Url;
-use std::error::Error;
 use is_wsl;
 use std::fs::File;
 use std::io::Write;
 use std::env::temp_dir;
 use std::process::Command as SysCommand;
+use std::error::Error;
+
+use crate::gui::sidebar::{self, Screen, SidebarMessage};
+use crate::gui::screens;
+use crate::gui::playback_bar;
+use crate::theme::AppTheme;
+use crate::settings;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -25,6 +31,8 @@ pub enum Message {
     TokenFailed(String),
     /// Log out
     LogoutRequested,
+    /// Sidebar interaction (screen change or theme toggle)
+    Sidebar(SidebarMessage),
 }
 
 pub struct App {
@@ -40,6 +48,10 @@ pub struct App {
     token: Option<TokenInfo>,
     /// Error message if any
     error: Option<String>,
+    /// Currently active sidebar screen (only meaningful once logged in)
+    active_screen: Screen,
+    /// Currently active app theme (persisted to disk)
+    app_theme: AppTheme,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +77,8 @@ impl Application for App {
                 code_input: String::new(),
                 token: None,
                 error: None,
+                active_screen: Screen::Search,
+                app_theme: settings::load_theme(),
             },
             IcedCommand::none(),
         )
@@ -163,6 +177,18 @@ impl Application for App {
                 self.code_input.clear();
                 IcedCommand::none()
             }
+            Message::Sidebar(sidebar_msg) => {
+                match sidebar_msg {
+                    SidebarMessage::ScreenSelected(screen) => {
+                        self.active_screen = screen;
+                    }
+                    SidebarMessage::ThemeToggleRequested => {
+                        self.app_theme = self.app_theme.toggled();
+                        settings::save_theme(self.app_theme);
+                    }
+                }
+                IcedCommand::none()
+            }
         }
     }
 
@@ -193,15 +219,7 @@ impl Application for App {
             ]
                 .padding(20)
                 .align_items(iced::Alignment::Start),
-            StatusEnum::LoggedIn => column![
-                text("Logged in successfully!").size(20),
-                text("Logged in successfully! Token acquired.").size(16),
-                button("Logout")
-                    .on_press(Message::LogoutRequested)
-                    .padding(10),
-            ]
-                .padding(20)
-                .align_items(iced::Alignment::Center),
+            StatusEnum::LoggedIn => return self.view_shell(),
         };
 
         Container::new(content)
@@ -213,7 +231,32 @@ impl Application for App {
     }
 
     fn theme(&self) -> Theme {
-        Theme::default()
+        self.app_theme.to_iced_theme()
+    }
+}
+
+impl App {
+    fn view_shell(&self) -> Element<'_, Message> {
+        let sidebar_view = sidebar::view(self.active_screen, self.app_theme)
+            .map(Message::Sidebar);
+
+        let screen_content: Element<'_, Message> = match self.active_screen {
+            Screen::Search => screens::search::view().map(|_| unreachable!()),
+            Screen::Library => screens::library::view().map(|_| unreachable!()),
+            Screen::MadeForYou => screens::made_for_you::view().map(|_| unreachable!()),
+            Screen::Queue => screens::queue::view().map(|_| unreachable!()),
+        };
+
+        let bar = playback_bar::view().map(|_| unreachable!());
+
+        let main_column = iced::widget::column![screen_content, bar]
+            .width(iced::Length::Fill)
+            .height(iced::Length::Fill);
+
+        iced::widget::row![sidebar_view, main_column]
+            .width(iced::Length::Fill)
+            .height(iced::Length::Fill)
+            .into()
     }
 }
 
@@ -222,16 +265,16 @@ fn open_url_via_temp_file(url: &str) -> std::io::Result<()> {
     // Create a temporary HTML file that redirects to the URL
     let temp_dir = temp_dir();
     let temp_file_path = temp_dir.join(format!("spotix_redirect_{}.html", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
-    
+
     let html_content = format!(
-        "<!DOCTYPE html>\n<html>\n<head>\n<meta http-equiv=\"refresh\" content=\"0; url={}\">\n<title>Redirecting to Spotify...</title>\n</head>\n<body>\nIf you are not redirected automatically, follow this <a href=\"{}\">link</a>.\n</body>\n</html>",
+        "<!DOCTYPE html>\\n<html>\\n<head>\\n<meta http-equiv=\\\"refresh\\\" content=\\\"0; url={}\\\">\\n<title>Redirecting to Spotify...</title>\\n</head>\\n<body>\\nIf you are not redirected automatically, follow this <a href=\\\"{}\\\">link</a>.\\n</body>\\n</html>",
         url, url
     );
-    
+
     // Write the HTML file
     let mut file = File::create(&temp_file_path)?;
     file.write_all(html_content.as_bytes())?;
-    
+
     // Convert the path to Windows format for explorer.exe
     let windows_path = if cfg!(target_os = "linux") && is_wsl::is_wsl() {
         // Use wslpath to convert Linux path to Windows path
@@ -246,12 +289,12 @@ fn open_url_via_temp_file(url: &str) -> std::io::Result<()> {
     } else {
         temp_file_path.to_string_lossy().to_string()
     };
-    
+
     // Open the temp file with explorer.exe
     SysCommand::new("explorer.exe")
         .arg(&windows_path)
         .spawn()?;
-    
+
     Ok(())
 }
 
@@ -284,8 +327,6 @@ fn extract_code_and_state(input: &str) -> (String, String) {
     // Otherwise, assume the input is the code itself (trim whitespace)
     (input.trim().to_string(), String::new())
 }
-
-
 
 /// Asynchronously handles the token request with state verification: exchanges the code for a token and retrieves it.
 async fn handle_token_request_with_state(spotify: Spotify, code: String, state: String) -> Result<TokenInfo, Box<dyn Error + Send + Sync>> {
