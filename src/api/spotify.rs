@@ -175,7 +175,7 @@ impl Spotify {
         let url = format!("https://api.spotify.com/v1/{}", endpoint);
         let response = self.http_client
             .get(&url)
-            .bearer_access_token(token.access_token.as_str())
+            .bearer_auth(token.access_token.as_str())
             .send()
             .await?
             .error_for_status()?;
@@ -189,8 +189,8 @@ impl Spotify {
     }
 
     /// Get the current user's playlists
-    pub async fn user_playlists(&self, limit: usize = 20) -> Result<Page<SimplePlaylist>, Box<dyn std::error::Error + Send + Sync>> {
-        self.get(format!("me/playlists?limit={}", limit)).await
+    pub async fn user_playlists(&self, limit: usize) -> Result<Page<SimplePlaylist>, Box<dyn std::error::Error + Send + Sync>> {
+        self.get(format!("me/playlists?limit={}", limit).as_str()).await
     }
 }
 
