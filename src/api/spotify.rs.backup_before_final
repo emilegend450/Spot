@@ -167,31 +167,6 @@ impl Spotify {
         *lock = Some(new_token);
         Ok(())
     }
-    /// Generic GET request to the Spotify API
-    pub async fn get<T: for<'de> Deserialize<'de>>(&self, endpoint: &str) -> Result<T, Box<dyn std::error::Error + Send + Sync>> {
-        let token = self.token.lock().await;
-        let token = token.as_ref()
-            .ok_or_else(|| "No token available".to_string())?;
-        let url = format!("https://api.spotify.com/v1/{}", endpoint);
-        let response = self.http_client
-            .get(&url)
-            .bearer_access_token(token.access_token.as_str())
-            .send()
-            .await?
-            .error_for_status()?;
-        let json = response.json().await?;
-        Ok(json)
-    }
-
-    /// Get the current user's profile
-    pub async fn current_user(&self) -> Result<CurrentUser, Box<dyn std::error::Error + Send + Sync>> {
-        self.get("me").await
-    }
-
-    /// Get the current user's playlists
-    pub async fn user_playlists(&self, limit: usize = 20) -> Result<Page<SimplePlaylist>, Box<dyn std::error::Error + Send + Sync>> {
-        self.get(format!("me/playlists?limit={}", limit)).await
-    }
 }
 
 /// Struct to hold the token response from Spotify (for serialization if needed).
@@ -204,42 +179,6 @@ pub struct TokenInfo {
     pub scope: Option<String>,
 }
 
-// User profile
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct CurrentUser {
-    pub display_name: String,
-    pub email: String,
-    pub id: String,
-    pub product: String,
-}
-
-// Simplified playlist for listing
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct SimplePlaylist {
-    pub name: String,
-    pub id: String,
-    pub images: Vec<PlaylistImage>,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct PlaylistImage {
-    pub url: String,
-}
-
-// Paginated response from Spotify API
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct Page<T> {
-    pub href: String,
-    pub items: Vec<T>,
-    pub limit: i32,
-    pub next: Option<String>,
-    pub offset: i32,
-    pub previous: Option<String>,
-    pub total: i32,
-}
 #[cfg(test)]
 mod tests {
     use super::*;
