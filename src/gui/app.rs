@@ -264,7 +264,13 @@ impl App {
 fn open_url_via_temp_file(url: &str) -> std::io::Result<()> {
     // Create a temporary HTML file that redirects to the URL
     let temp_dir = temp_dir();
-    let temp_file_path = temp_dir.join(format!("spotix_redirect_{}.html", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()));
+    let temp_file_path = temp_dir.join(format!(
+        "spotix_redirect_{}.html",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    ));
 
     let html_content = format!(
         "<!DOCTYPE html>\\n<html>\\n<head>\\n<meta http-equiv=\\\"refresh\\\" content=\\\"0; url={}\\\">\\n<title>Redirecting to Spotify...</title>\\n</head>\\n<body>\\nIf you are not redirected automatically, follow this <a href=\\\"{}\\\">link</a>.\\n</body>\\n</html>",
@@ -297,8 +303,6 @@ fn open_url_via_temp_file(url: &str) -> std::io::Result<()> {
 
     Ok(())
 }
-
-/// Opens a URL using properly quoted cmd.exe invocation (WSL fallback)
 fn open_url_via_cmd_quoted(url: &str) -> std::io::Result<()> {
     // Use PowerShell to start the URL, which handles quoting better in WSL
     // Escape single quotes in URL for PowerShell by doubling them
