@@ -1,6 +1,7 @@
 use iced::{Application, Command as IcedCommand, Element, Theme, executor};
 use iced::widget::{button, column, text, Container, TextInput};
 use crate::api::spotify::{Spotify, TokenInfo};
+use crate::api::spotify::CurrentlyPlaying;
 use url::Url;
 use is_wsl;
 use std::fs::File;
@@ -31,6 +32,10 @@ pub enum Message {
     TokenFailed(String),
     /// Log out
     LogoutRequested,
+    /// Request an update of the playback state
+    PlaybackStateRequested,
+    /// Received the updated playback state
+    PlaybackStateUpdated(Option<CurrentlyPlaying>),
     /// Sidebar interaction (screen change or theme toggle)
     Sidebar(SidebarMessage),
 }
@@ -52,6 +57,8 @@ pub struct App {
     active_screen: Screen,
     /// Currently active app theme (persisted to disk)
     app_theme: AppTheme,
+    /// Current playback state
+    playback_state: Option<CurrentlyPlaying>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +86,7 @@ impl Application for App {
                 error: None,
                 active_screen: Screen::Search,
                 app_theme: settings::load_theme(),
+                playback_state: None,
             },
             IcedCommand::none(),
         )
@@ -177,6 +185,23 @@ impl Application for App {
                 self.code_input.clear();
                 IcedCommand::none()
             }
+                        Message::PlaybackStateRequested => {
+                let spotify = self.spotify.clone();
+                IcedCommand::perform(
+                    async move {
+                        match spotify.currently_playing().await {
+                            Ok(Some(track)) => Some(track),
+                            _ => None,
+                        }
+                    },
+                    Message::PlaybackStateUpdated,
+                )
+            }
+            Message::PlaybackStateUpdated(state) => {
+                self.playback_state = state;
+                IcedCommand::none()
+            }
+
             Message::Sidebar(sidebar_msg) => {
                 match sidebar_msg {
                     SidebarMessage::ScreenSelected(screen) => {
@@ -230,7 +255,22 @@ impl Application for App {
             .into()
     }
 
-    fn theme(&self) -> Theme {
+    
+
+    fn subscription(&self) -> iced::Subscription<Self::Message> {
+        use iced::time::every;
+        use std::time::Duration;
+
+        match self.status {
+            StatusEnum::LoggedIn => {
+                // Every 5 seconds, fetch the currently playing track
+                every(Duration::from_secs(5)).map(|_| Message::PlaybackStateRequested)
+            }
+            _ => iced::Subscription::none(),
+        }
+    }
+
+fn theme(&self) -> Theme {
         self.app_theme.to_iced_theme()
     }
 }
@@ -247,7 +287,7 @@ impl App {
             Screen::Queue => screens::queue::view().map(|_| unreachable!()),
         };
 
-        let bar = playback_bar::view().map(|_| unreachable!());
+        let bar = playback_bar::view(self.playback_state.as_ref()).map(|_| unreachable!());
 
         let main_column = iced::widget::column![screen_content, bar]
             .width(iced::Length::Fill)

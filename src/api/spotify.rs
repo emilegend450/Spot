@@ -174,7 +174,7 @@ impl Spotify {
             .ok_or_else(|| "No token available".to_string())?;
         let url = format!("https://api.spotify.com/v1/{}", endpoint);
         let response = self.http_client
-            .get(&url)
+            .get(url)
             .bearer_auth(token.access_token.as_str())
             .send()
             .await?
@@ -187,10 +187,82 @@ impl Spotify {
     pub async fn current_user(&self) -> Result<CurrentUser, Box<dyn std::error::Error + Send + Sync>> {
         self.get("me").await
     }
+    /// Get the currently playing track
+    pub async fn currently_playing(&self) -> Result<Option<CurrentlyPlaying>, Box<dyn std::error::Error + Send + Sync>> {
+        let token = self.token.lock().await;
+        let token = token.as_ref()
+            .ok_or_else(|| "No token available".to_string())?;
+        let url = "https://api.spotify.com/v1/me/player/currently-playing";
+        let response = self.http_client
+            .get(url)
+            .bearer_auth(token.access_token.as_str())
+            .send()
+            .await?;
+        if response.status().as_u16() == 204 {
+            return Ok(None);
+        }
+        let json = response.json().await?;
+        Ok(Some(json))
+    }
 
     /// Get the current user's playlists
     pub async fn user_playlists(&self, limit: usize) -> Result<Page<SimplePlaylist>, Box<dyn std::error::Error + Send + Sync>> {
         self.get(format!("me/playlists?limit={}", limit).as_str()).await
+    }
+    /// Pause playback
+    pub async fn pause_playback(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let token = self.token.lock().await;
+        let token = token.as_ref()
+            .ok_or_else(|| "No token available".to_string())?;
+        let url = "https://api.spotify.com/v1/me/player/pause";
+        self.http_client
+            .put(url)
+            .bearer_auth(token.access_token.as_str())
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    /// Resume playback
+    pub async fn resume_playback(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let token = self.token.lock().await;
+        let token = token.as_ref()
+            .ok_or_else(|| "No token available".to_string())?;
+        let url = "https://api.spotify.com/v1/me/player/play";
+        self.http_client
+            .put(url)
+            .bearer_auth(token.access_token.as_str())
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    /// Skip to next track
+    pub async fn next_track(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let token = self.token.lock().await;
+        let token = token.as_ref()
+            .ok_or_else(|| "No token available".to_string())?;
+        let url = "https://api.spotify.com/v1/me/player/next";
+        self.http_client
+            .post(url)
+            .bearer_auth(token.access_token.as_str())
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    /// Skip to previous track
+    pub async fn previous_track(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let token = self.token.lock().await;
+        let token = token.as_ref()
+            .ok_or_else(|| "No token available".to_string())?;
+        let url = "https://api.spotify.com/v1/me/player/previous";
+        self.http_client
+            .post(url)
+            .bearer_auth(token.access_token.as_str())
+            .send()
+            .await?;
+        Ok(())
     }
 }
 
@@ -239,6 +311,38 @@ pub struct Page<T> {
     pub offset: i32,
     pub previous: Option<String>,
     pub total: i32,
+}
+
+/// Currently playing track
+#[derive(Deserialize, Debug, Clone)]
+pub struct CurrentlyPlaying {
+    pub item: Option<Track>,
+    pub is_playing: bool,
+    pub progress_ms: u32,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Track {
+    pub name: String,
+    pub artists: Vec<Artist>,
+    pub album: Album,
+    pub duration_ms: u32,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Artist {
+    pub name: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Album {
+    pub name: String,
+    pub images: Vec<Image>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct Image {
+    pub url: String,
 }
 #[cfg(test)]
 mod tests {
